@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, sobel
 
 
 def describe_point(im: np.ndarray, pos: list) -> dict:
@@ -120,9 +120,21 @@ def structure_matrix(im: np.ndarray, sigma: float) -> np.ndarray:
         Tenseur de structure. 1er canal est Ix^2, 2e canal est Iy^2
         le 3e canal est IxIy
     """
-    S = np.zeros((*im.shape,3))
-    # TODO: calcul du tenseur de structure pour im.
-    
+    # Calcul des dérivées
+    Ix = sobel(im, axis=1)
+    Iy = sobel(im, axis=0)
+
+    # Lissage des dérivées
+    Ix2 = smooth_image(Ix**2, sigma)
+    Iy2 = smooth_image(Iy**2, sigma)
+    IxIy = smooth_image(Ix*Iy, sigma)
+
+    # Création du tenseur de structure
+    S = np.zeros((im.shape[0], im.shape[1], 3))
+    S[:,:,0] = Ix2
+    S[:,:,1] = Iy2
+    S[:,:,2] = IxIy
+
     return S
 
 def cornerness_response(S: np.ndarray) -> np.ndarray:
@@ -136,9 +148,17 @@ def cornerness_response(S: np.ndarray) -> np.ndarray:
     R: ndarray
         Une carte de réponse de la cornerness
     """
-    R = np.zeros(S.shape[0:2])
-    # TODO: Remplir R avec la "cornerness" pour chaque pixel en utilisant le tenseur de structure.
+    Sxx = S[:,:,0]
+    Syy = S[:,:,1]
+    Sxy = S[:,:,2]
+    
+    # Corner response
+    det = (Sxx * Syy) - (Sxy**2)
+    trace = Sxx + Syy
+    alpha=0.06
+    
     # On utilise la formulation det(S) - alpha * trace(S)^2, alpha = 0.06
+    R = det - alpha *(trace**2)
 
     return R
 
@@ -156,13 +176,20 @@ def nms_image(im: np.ndarray, w: int) -> np.ndarray:
         Image contenant seulement les maximums locaux pour un voisinage de w pixels.
     """
     r = np.copy(im)
-    # TODO: faire NMS sur la carte de réponse
-    # Pour chaque pixel dans l'image:
-    #     Pour chaque voisin dans w:
-    #         Si la réponse du voisin est plus grande que la réponse du pixel:
-    #             Assigner à ce pixel une très petite réponse (ex: -np.inf)
+    h, w_ = im.shape
 
-    return r
+    for i in range(h):
+        for j in range(w_):
+            max_val = im[i, j]  # On commence par supposer que le pixel actuel est le maximum
+            for ki in range(max(0, i-w), min(i+w+1, h)):  # Parcours des voisins en hauteur
+                for kj in range(max(0, j-w), min(j+w+1, w_)):  # Parcours des voisins en largeur
+                    if im[ki, kj] > max_val:  # Si un voisin a une réponse supérieure
+                        r[i, j] = -np.inf  # Le pixel actuel n'est pas un maximum local
+                        break  # Pas besoin de chercher plus loin pour ce pixel
+                if r[i, j] == -np.inf:
+                    break  # Sortie anticipée si le pixel a déjà été marqué
+
+    return r 
 
 def harris_corner_detector(im: np.ndarray, sigma: float, thresh: float, nms: int) -> np.ndarray:
     """ Détecteur de coin de Harris, et extraction des caractéristiques autour des coins.
@@ -193,12 +220,13 @@ def harris_corner_detector(im: np.ndarray, sigma: float, thresh: float, nms: int
     # Run NMS on the responses
     Rnms = nms_image(R, nms)
 
-    # TODO: Comptez le nombre de réponses au-dessus d'un seuil thresh
-    count = 1 # changez ceci
+    R_max = np.max(Rnms)
+    corner_coordinates = np.where(Rnms >= thresh * R_max)
+    corner_coordinates = list(zip(corner_coordinates[0], corner_coordinates[1]))
 
-    n = count # <- fixer n = nombre de coins dans l'image
     d = []
-    # TODO: remplir le tableau d avec le descripteur de chaque coin. Utilisez describe_index().
+    for c in corner_coordinates:
+        d.append(describe_point(im, c))
     
     return d
 
