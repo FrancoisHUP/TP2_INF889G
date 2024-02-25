@@ -1,6 +1,6 @@
 from harris_image import harris_corner_detector, mark_corners
 import numpy as np
-
+from numpy.linalg import det
 
 def make_translation_homography(dr: float, dc: float) -> np.ndarray:
     """Create a translation homography
@@ -21,6 +21,7 @@ def make_translation_homography(dr: float, dc: float) -> np.ndarray:
     H[2,2] = 1
     H[0,2] = dr # Row translation
     H[1,2] = dc # Col translation
+    return H
 
 def match_compare(a: float, b: float) -> int:
     """ Comparator for matches
@@ -151,10 +152,7 @@ def l1_distance(a: np.ndarray, b: np.ndarray) -> float:
     l1: float
         l1 distance between arrays (sum of absolute differences).
     """
-    l1 = 0
-    #TODO: return the correct number.
-
-    return l1
+    return np.sum(np.abs(a - b))
 
 
 def match_descriptors(a: list, b: list) -> list:
@@ -173,29 +171,35 @@ def match_descriptors(a: list, b: list) -> list:
     bn = len(b)
     matches = []
     for j in range(an):
-        # TODO: for every descriptor in a, find best match in b.
+        
         # record ai as the index in a and bi as the index in b.
-        bind = 0 # <- find the best match
+        min_distance = float('inf')
+        bind = 0  
+        for i in range(bn):
+            distance = l1_distance(a[j]["data"], b[i]["data"]) 
+            if distance < min_distance:
+                min_distance = distance
+                bind = i
 
         matches.append({})
         matches[j]['ai'] = j
-        matches[j]['bi'] = bind # <- should be index in b.
+        matches[j]['bi'] = bind 
         matches[j]['p'] = a[j]['pos']
         matches[j]['q'] = b[bind]['pos']
-        matches[j]['distance'] = 0 # <- should be the smallest L1 distance!
-    
-    seen = []
+        matches[j]['distance'] = min_distance 
+
+    # Sorting matches based on distance to bring the best matches to the front
+    matches.sort(key=lambda x: x['distance']) # Or use match_compare function
+
+    # Ensure matches are one-to-one
+    seen_b_indices = set()
     filtered_matches = []
-    # TODO: we want matches to be injective (one-to-one).
-    # Sort matches based on distance using match_compare and sort.
-    # Then throw out matches to the same element in b. Use seen to keep track.
-    # Each point should only be a part of one match.
-    # Some points will not be in a match.
-    # In practice just bring good matches to front of list.
+    for match in matches:
+        if match['bi'] not in seen_b_indices:
+            filtered_matches.append(match)
+            seen_b_indices.add(match['bi'])
 
-    matches = filtered_matches
-
-    return matches
+    return filtered_matches
 
 def project_point(H, p):
     """ Apply a projective transformation to a point.
@@ -210,32 +214,40 @@ def project_point(H, p):
     q: list
         point projected using the homography.
     """
-
     c = np.zeros((3, 1))
-    # TODO: project point p with homography H.
-    # Remember that homogeneous coordinates are equivalent up to scalar.
-    # Have to divide by.... something...
-    q = [0, 0]
+
+    # Convert point p to homogeneous coordinates
+    p_homogeneous = np.array([p[0], p[1], 1])
+    
+    # Apply homography H to p
+    c = H @ p_homogeneous
+    
+    # Convert back to Cartesian coordinates by dividing by the third component
+    q = [c[0] / c[2], c[1] / c[2]]
 
     return q
 
 def point_distance(p, q):
-    """ Calculate L2 distance between two points.
+    """Calculate L2 distance between two points.
     Parameters
     ----------
     p, q: list
-        points.
+        Points.
     Returns
     -------
     l2: float
         L2 distance between them.
     """
-    l2 = 0
-    # TODO: should be a quick one.
-
+    # # Calculate the difference vector and square each component
+    # diff = np.array(p) - np.array(q)
+    # squared_diff = np.square(diff)
+    
+    # # Sum the components and take the square root
+    # l2 = np.sqrt(squared_diff.sum())
+    l2 = np.sqrt((p[0]-q[0])**2 + (p[1]-q[1])**2)
     return l2
 
-def model_inliers(H: np.ndarray, matches: list, thresh: float) -> tuple:
+def model_inliers(H: np.ndarray, matches: list, inlier_thresh: float) -> tuple:
     """Count number of inliers in a set of matches. Should also bring inliers to the front of the array.
     Parameters
     ----------
@@ -257,24 +269,53 @@ def model_inliers(H: np.ndarray, matches: list, thresh: float) -> tuple:
     # TODO: count number of matches that are inliers
     # i.e. distance(H*p, q) < thresh
     # Also, sort the matches m so the inliers are the first 'count' elements.
+    
+    inliers = []
+    outliers = []
+    for match in matches:
+        # Extract point p from match and convert to homogeneous coordinates (x, y, 1)
+        p = np.array([match['p'][0], match['p'][1], 1])
+        q = np.array(match['q'])  # Point q in the match
+        
+        # Project p using the homography H
+        p_proj_homog = H @ p
+        p_proj = p_proj_homog[:2] / p_proj_homog[2]  # Convert to non-homogeneous coordinates
+        
+        # Calculate L2 distance between projected point and q
+        l2_distance = point_distance(p_proj, q[:2])
+
+        # Check if the match is an inlier based on the threshold
+        if l2_distance < inlier_thresh:
+            inliers.append(match)
+        else:
+            outliers.append(match)
+    
+    # Count of inliers and rearrange matches so inliers are at the beginning
+    count = len(inliers)
+    # print("Best inlier:", count)
+    new_matches = inliers + outliers
 
     return (count, new_matches)
 
-
-def randomize_matches(matches: list) -> list:
+def randomize_matches(matches: list, n : int) -> list:
     """ Randomly shuffle matches for RANSAC.
     Parameters
     ----------
     matches: list
         matches to shuffle in place
+    n: int
+        n number of matches to shuffle from the best matches
     Returns
     -------
     shuffled_matches: list
         Shuffled matches
     """
-    # TODO: implement Fisher-Yates to shuffle the array.
-
-    return matches
+    n_shuffle_matches = matches[:n]
+    rest = matches[n:]
+    for i in range(len(n_shuffle_matches) - 1, 0, -1):
+        j = np.random.randint(0, i)
+        n_shuffle_matches[i], n_shuffle_matches[j] = n_shuffle_matches[j], n_shuffle_matches[i]
+    return n_shuffle_matches + rest
 
 
 def compute_homography(matches: list, n: int) -> np.ndarray:
@@ -294,13 +335,16 @@ def compute_homography(matches: list, n: int) -> np.ndarray:
 
     M = np.zeros((n*2,8))
     b = np.zeros((n*2,1))
-
-    for i in range(n):
-        r  = float(matches[i]['p'][0])
-        rp = float(matches[i]['q'][0])
-        c  = float(matches[i]['p'][1])
-        cp = float(matches[i]['q'][1])
-        # TODO: fill in the matrices M and b.
+    for i in range(min(n, len(matches))):
+        mx = float(matches[i]['p'][0])
+        my = float(matches[i]['p'][1])
+        nx = float(matches[i]['q'][0])
+        ny = float(matches[i]['q'][1])
+        # Fill in the matrices M and b.
+        M[2*i] = [mx,  my, 1, 0, 0, 0, -mx*nx, -my*nx] 
+        M[2*i + 1] = [0, 0, 0, mx,  my, 1, -mx*ny, -my*ny]
+        b[2*i] = nx
+        b[2*i + 1] = ny
 
     # Solve the linear system
     if M.shape[0] == M.shape[1]:
@@ -311,13 +355,17 @@ def compute_homography(matches: list, n: int) -> np.ndarray:
     # If a solution can't be found, return empty matrix;
     if a is None:
         return None
-
-    H = np.zeros((3,3))
-    # TODO: fill in the homography H based on the result in a.
+    
+    # Fill in the homography H based on the result in a.
+    H = np.array([
+        [a[0][0], a[1][0], a[2][0]],
+        [a[3][0], a[4][0], a[5][0]],
+        [a[6][0], a[7][0], 1]
+    ])
 
     return H
 
-def RANSAC(matches: list, thresh: float, k: int, cutoff: int):
+def RANSAC(matches: list, thresh: float, k: int, cutoff: int, n: int = 10):
     """Perform RANdom SAmple Consensus to calculate homography for noisy matches.
     Parameters
     ----------
@@ -336,18 +384,19 @@ def RANSAC(matches: list, thresh: float, k: int, cutoff: int):
     """
     best = 0
     Hb = make_translation_homography(0, 256) # Initial condition
-    # TODO: fill in RANSAC algorithm.
-    # for k iterations:
-    #     shuffle the matches
-    #     compute a homography with a few matches (how many??)
-    #     if new homography is better than old (how can you tell?):
-    #         compute updated homography using all inliers
-    #         remember it and how good it is
-    #         if it's better than the cutoff:
-    #             return it immediately
-    # if we get to the end return the best homography
+    for k in range(k): # for k iterations:
+        suffle = randomize_matches(matches, n) # shuffle the matches
+        H = compute_homography(suffle, n) # compute a homography with a few matches (how many??)
+        inlier_count, _ = model_inliers(H, matches, thresh)
+        if inlier_count > 0:
+            print("Inliers:", inlier_count)
+        if inlier_count > best: # if new homography is better than old (how can you tell?):
+            best = inlier_count # remember it and how good it is
+            Hb = H  # compute updated homography using all inliers
+            if inlier_count > cutoff: # if it's better than the cutoff:
+                break   # return it immediately
 
-    return Hb
+    return Hb  # if we get to the end return the best homography
 
 def combine_images(a, b, H):
     """ Stitches two images together using a projective transformation.
@@ -391,14 +440,40 @@ def combine_images(a, b, H):
         return np.copy(a)
 
     c = np.zeros((h,w,a.shape[2]), dtype=a.dtype)
-    
-    # Paste image a into the new image offset by dr and dc.
-    for k in range(a.shape[2]):
-        for j in range(a.shape[1]):
-            for i in range(a.shape[0]):
-                # TODO: remplir l'image
 
-                pass
+    for k in range(a.shape[2]):
+        for i in range(a.shape[0]):
+            for j in range(a.shape[1]):
+                c[i-int(dr),j-int(dc),k] = a[i,j,k]
+    
+    # Paste in image b
+    for i in range(int(h)):
+        for j in range(int(w)):
+            p_proj = project_point(H, [j+dc, i+dr])  # Project point from c back to b
+            if 0 <= p_proj[0] < b.shape[1] and 0 <= p_proj[1] < b.shape[0]:
+                # If the projected point falls within the bounds of image b,
+                # use bilinear interpolation to estimate the pixel value.
+                x, y = p_proj
+                x0, y0 = int(x), int(y)
+                x1, y1 = min(x0 + 1, b.shape[1] - 1), min(y0 + 1, b.shape[0] - 1)
+
+                # Calculate the bilinear interpolation
+                for k in range(b.shape[2]):
+                    f00 = b[y0, x0, k]
+                    f01 = b[y0, x1, k]
+                    f10 = b[y1, x0, k]
+                    f11 = b[y1, x1, k]
+                    c[i, j, k] = (f00 * (x1 - x) * (y1 - y) +
+                                  f10 * (x - x0) * (y1 - y) +
+                                  f01 * (x1 - x) * (y - y0) +
+                                  f11 * (x - x0) * (y - y0))
+    # Paste image a into the new image offset by dr and dc.
+    # for k in range(a.shape[2]):
+    #     for j in range(a.shape[1]):
+    #         for i in range(a.shape[0]):
+    #             # TODO: remplir l'image
+
+    #             pass
     # TODO: Paste in image b as well.
     # You should loop over some points in the new image (which? all?)
     # and see if their projection from a coordinates to b coordinates falls
@@ -407,7 +482,7 @@ def combine_images(a, b, H):
     
     return c
 
-def panorama_image(a, b, sigma=2, thresh=0.0003, nms=3, inlier_thresh=10, iters=1000, cutoff=15):
+def panorama_image(a, b, sigma=2, thresh=0.25, nms=3, inlier_thresh=10, iters=1000, cutoff=15):
     """ Create a panoramam between two images.
     Parameters
     ----------
