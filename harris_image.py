@@ -1,7 +1,6 @@
 import numpy as np
 from scipy.ndimage import gaussian_filter, sobel
 
-
 def describe_point(im: np.ndarray, pos: list) -> dict:
     """Crée un descripteur de caractéristique pour un point l'image
     Parameters
@@ -130,7 +129,7 @@ def structure_matrix(im: np.ndarray, sigma: float) -> np.ndarray:
     IxIy = smooth_image(Ix*Iy, sigma)
 
     # Création du tenseur de structure
-    S = np.zeros((im.shape[0], im.shape[1], 3))
+    S = np.zeros((*im.shape,3))
     S[:,:,0] = Ix2
     S[:,:,1] = Iy2
     S[:,:,2] = IxIy
@@ -210,7 +209,6 @@ def harris_corner_detector(im: np.ndarray, sigma: float, thresh: float, nms: int
     """
     img = im.mean(axis=2) # Convert to grayscale
     img = (img.astype(float) - img.min()) / (img.max() - img.min())
-
     # Calculate structure matrix
     S = structure_matrix(img, sigma)
 
@@ -220,8 +218,7 @@ def harris_corner_detector(im: np.ndarray, sigma: float, thresh: float, nms: int
     # Run NMS on the responses
     Rnms = nms_image(R, nms)
 
-    R_max = np.max(Rnms)
-    corner_coordinates = np.where(Rnms >= thresh * R_max)
+    corner_coordinates = np.where(Rnms > thresh)
     corner_coordinates = list(zip(corner_coordinates[0], corner_coordinates[1]))
 
     d = []

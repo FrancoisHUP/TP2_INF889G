@@ -238,10 +238,7 @@ def point_distance(p, q):
     l2: float
         L2 distance between them.
     """
-    # Calculate the sum of the squared differences
-    sum_of_squares = sum((pi - qi) ** 2 for pi, qi in zip(p, q))
-    # Take the square root to get the L2 distance
-    l2 = sum_of_squares ** 0.5
+    l2 = np.sqrt((p[0]-q[0])**2 + (p[1]-q[1])**2)
     return l2
 
 def model_inliers(H: np.ndarray, matches: list, inlier_thresh: float) -> tuple:
@@ -264,8 +261,6 @@ def model_inliers(H: np.ndarray, matches: list, inlier_thresh: float) -> tuple:
     inliers = []
     outliers = []
     for match in matches:
-        print(match['p'][0])
-        print(match['p'][0])
         # Extract point p from match and convert to homogeneous coordinates (x, y, 1)
         p = np.array([match['p'][0], match['p'][1], 1])
         q = np.array(match['q'])  # Point q in the match
@@ -275,7 +270,6 @@ def model_inliers(H: np.ndarray, matches: list, inlier_thresh: float) -> tuple:
 
         # Calculate L2 distance between projected point and q
         l2_distance = point_distance(p_proj, q[:2])  
-        
         # Check if the match is an inlier based on the threshold
         if l2_distance < inlier_thresh:
             inliers.append(match)
@@ -289,7 +283,6 @@ def model_inliers(H: np.ndarray, matches: list, inlier_thresh: float) -> tuple:
     new_matches = inliers + outliers
 
     return (count, new_matches)
-
 
 def randomize_matches(matches: list) -> list:
     """ Randomly shuffle matches for RANSAC.
@@ -306,7 +299,6 @@ def randomize_matches(matches: list) -> list:
         j = np.random.randint(0, i)
         matches[i], matches[j] = matches[j], matches[i]
     return matches
-
 
 def compute_homography(matches: list, n: int) -> np.ndarray:
     """Computes homography between two images given matching pixels.
@@ -377,7 +369,7 @@ def RANSAC(matches: list, thresh: float, k: int, cutoff: int):
     Hb = make_translation_homography(0, 256) # Initial condition
     for k in range(k): # for k iterations:
         suffle = randomize_matches(matches) # shuffle the matches
-        H = compute_homography(suffle,5) # compute a homography with a few matches (how many??)
+        H = compute_homography(suffle, 10) # compute a homography with a few matches (how many??)
         inlier_count, _ = model_inliers(H, matches, thresh)
         if inlier_count > best: # if new homography is better than old (how can you tell?):
             best = inlier_count # remember it and how good it is
@@ -426,53 +418,38 @@ def combine_images(a, b, H):
     # Can disable this if you are making very big panoramas.
     # Usually this means there was an error in calculating H.
     if w > 7000 or h > 7000:
-        print("output too big, stopping.")
+        print("Output too big, stopping.")
         return np.copy(a)
 
-    c = np.zeros((h,w,a.shape[2]), dtype=a.dtype)
+    c = np.zeros((h, w, a.shape[2]), dtype=a.dtype)
 
-    for k in range(a.shape[2]):
-        for i in range(a.shape[0]):
-            for j in range(a.shape[1]):
-                c[i-int(dr),j-int(dc),k] = a[i,j,k]
-    
-    # Paste in image b
-    for i in range(int(h)):
-        for j in range(int(w)):
-            p_proj = project_point(H, [j+dc, i+dr])  # Project point from c back to b
-            if 0 <= p_proj[0] < b.shape[1] and 0 <= p_proj[1] < b.shape[0]:
-                # If the projected point falls within the bounds of image b,
-                # use bilinear interpolation to estimate the pixel value.
-                x, y = p_proj
-                x0, y0 = int(x), int(y)
-                x1, y1 = min(x0 + 1, b.shape[1] - 1), min(y0 + 1, b.shape[0] - 1)
-
-                # Calculate the bilinear interpolation
-                for k in range(b.shape[2]):
-                    f00 = b[y0, x0, k]
-                    f01 = b[y0, x1, k]
-                    f10 = b[y1, x0, k]
-                    f11 = b[y1, x1, k]
-                    c[i, j, k] = (f00 * (x1 - x) * (y1 - y) +
-                                  f10 * (x - x0) * (y1 - y) +
-                                  f01 * (x1 - x) * (y - y0) +
-                                  f11 * (x - x0) * (y - y0))
     # Paste image a into the new image offset by dr and dc.
-    # for k in range(a.shape[2]):
-    #     for j in range(a.shape[1]):
-    #         for i in range(a.shape[0]):
-    #             # TODO: remplir l'image
+    for k in range(a.shape[2]):
+        for j in range(a.shape[1]):
+            for i in range(a.shape[0]):
+                #Remplir l'image
+                c[i - dr, j - dc, k] = a[i, j, k]
 
-    #             pass
-    # TODO: Paste in image b as well.
-    # You should loop over some points in the new image (which? all?)
-    # and see if their projection from a coordinates to b coordinates falls
-    # inside of the bounds of image b. If so, use bilinear interpolation to
-    # estimate the value of b at that projection, then fill in image c.
-    
+    # Paste image b using bilinear interpolation.
+    for k in range(b.shape[2]):
+        for j in range(w):
+            for i in range(h):
+                # Projection des points en coords d'image b
+                p_a = project_point(H, [i + dr, j + dc])
+
+                if 0 <= p_a[0] < b.shape[0] - 1 and 0 <= p_a[1] < b.shape[1] - 1:
+                    # Bilinear interpolation
+                    i_a, j_a = int(p_a[0]), int(p_a[1])
+                    a_1, b_1 = p_a[0] - i_a, p_a[1] - j_a
+
+                    # Interpolate pixel values
+                    c[i, j, k] = (1 - a_1) * (1 - b_1) * b[i_a, j_a, k] + \
+                                 a_1 * (1 - b_1) * b[i_a + 1, j_a, k] + \
+                                 (1 - a_1) * b_1 * b[i_a, j_a + 1, k] + \
+                                 a_1 * b_1 * b[i_a + 1, j_a + 1, k]
+
     return c
-
-def panorama_image(a, b, sigma=2, thresh=0.25, nms=3, inlier_thresh=10, iters=1000, cutoff=15):
+def panorama_image(a, b, sigma=2, thresh=0.0003, nms=3, inlier_thresh=5, iters=5000, cutoff=100):
     """ Create a panoramam between two images.
     Parameters
     ----------
